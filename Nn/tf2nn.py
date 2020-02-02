@@ -2,7 +2,8 @@ import tensorflow as tf
 from .activations import swish, mish
 from tensorflow.keras.layers import Dense
 from Nn.layers import Noisy, mlp
-
+from UnityEnvTools.GCN.layers import GraphConvolution
+from UnityEnvTools.attention.attention import MultiHeadAttention
 activation_fn = 'tanh'
 
 initKernelAndBias = {
@@ -53,6 +54,46 @@ class actor_dpg(Model):
         mu = self.net(x)
         return mu
 
+class actor_dpg_gcn(Model):
+    '''
+    use for DDPG and/or TD3 algorithms' actor network.
+    input: vector of state
+    output: deterministic action(mu) and disturbed action(action) given a state
+    '''
+
+    def __init__(self, adj_shape, x_shape, output_shape, name, hidden_units, *, visual_net):
+        super().__init__(visual_net, name=name)
+        self.gcn_layers = []
+        self.gcn_layers.append(GraphConvolution(input_dim=x_shape[1],
+                                             output_dim=16,
+                                             num_features_nonzero=0,
+                                             activation=tf.nn.relu,
+                                             dropout=0.5,
+                                             is_sparse_inputs=False))
+        self.attention_layer = MultiHeadAttention(d_model=16, num_heads=8)
+        self.net = mlp(hidden_units, output_shape=output_shape, out_activation='tanh')
+        self.init_or_run(tf.keras.Input(shape=(adj_shape[0], adj_shape[1])), tf.keras.Input(shape=(x_shape[0], x_shape[1])), tf.keras.Input(shape=(1, adj_shape[0])))
+        self.update_vars()
+
+    def call(self, adj, x, vec, *args, **kwargs):
+        '''
+        args: action, reward, done. etc ...
+        '''
+        ret = self.init_or_run(adj, x, vec)
+        return ret
+
+    def init_or_run(self, adj, x, vec):
+        outputs = [x]
+
+        for layer in self.gcn_layers:
+            hidden = layer((outputs[-1], adj))
+            outputs.append(hidden)
+        output = outputs[-1]
+
+        out, attn = self.attention_layer(output, k=output, q=output, mask=None)
+
+        mu = self.net(vec*out[0])
+        return mu
 
 class actor_mu(Model):
     '''
@@ -129,6 +170,45 @@ class critic_q_one(Model):
         q = self.net(tf.concat((x, a), axis=-1))
         return q
 
+class critic_q_one_gcn(Model):
+    '''
+    use for evaluate the value given a state-action pair.
+    input: tf.concat((state, action),axis = 1)
+    output: q(s,a)
+    '''
+    def __init__(self, adj_shape, x_shape, action_dim, name, hidden_units, *, visual_net):
+        super().__init__(visual_net, name=name)
+        self.gcn_layers = []
+        self.gcn_layers.append(GraphConvolution(input_dim=x_shape[1],
+                                             output_dim=16,
+                                             num_features_nonzero=0,
+                                             activation=tf.nn.relu,
+                                             dropout=0.5,
+                                             is_sparse_inputs=False))
+        self.attention_layer = MultiHeadAttention(d_model=16, num_heads=8)
+        self.net = mlp(hidden_units, output_shape=1, out_activation=None)
+        self.init_or_run(tf.keras.Input(shape=(adj_shape[0], adj_shape[1])), tf.keras.Input(shape=(x_shape[0], x_shape[1])), tf.keras.Input(shape=(1, adj_shape[0])), tf.keras.Input(shape=action_dim))
+        self.update_vars()
+
+    def call(self, adj, x, vec, a, *args, **kwargs):
+        '''
+        args: action, reward, done. etc ...
+        '''
+        ret = self.init_or_run(adj, x, vec, a)
+        return ret
+
+    def init_or_run(self, adj, x, vec, a):
+        outputs = [x]
+
+        for layer in self.gcn_layers:
+            hidden = layer((outputs[-1], adj))
+            outputs.append(hidden)
+        output = outputs[-1]
+
+        out, attn = self.attention_layer(output, k=output, q=output, mask=None)
+
+        q = self.net(tf.concat((vec*out[0], a), axis=-1))
+        return q
 
 class critic_q_one2(Model):
     '''
@@ -146,7 +226,7 @@ class critic_q_one2(Model):
 
     def init_or_run(self, x, a):
         features = self.state_feature_net(x)
-        q = self.net(tf.concat((x, action), axis=-1))
+        q = self.net(tf.concat((x, a), axis=-1))
         return q
 
 

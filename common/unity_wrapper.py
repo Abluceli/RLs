@@ -1,7 +1,9 @@
 
 import numpy as np
 from utils.sampler import create_sampler_manager
-
+import sys
+sys.path.append("/Users/yangli/GitHub/UnityEnvTools")
+from UnityEnvTools.EnvTools import preprocess_observation
 
 class BasicWrapper:
     def __init__(self, env):
@@ -105,6 +107,48 @@ class UnityReturnWrapper(BasicWrapper):
             ss.append(np.array(s))
         return np.array(ss)
 
+
+class UnityReturnWrapper_GCN(BasicWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        return self.splitByBrain(obs)
+
+    def step(self, **kwargs):
+        obs = self.env.step(**kwargs)
+        return self.splitByBrain(obs)
+
+    def splitByBrain(self, obs):
+        adj = []
+        x = []
+        for brain_name in self.brain_names:
+
+            a, s = preprocess_observation(obs[brain_name].vector_observations[0])
+            adj.append(a)
+            x.append(s)
+
+        reward = [np.asarray(obs[brain_name].rewards) for brain_name in self.brain_names]
+        done = [np.asarray(obs[brain_name].local_done) for brain_name in self.brain_names]
+        return zip(adj, x, reward, done)
+
+    def _get_visual_input(self, n, cameras, brain_obs):
+        '''
+        inputs:
+            n: agents number
+            cameras: camera number
+            brain_obs: observations of specified brain, include visual and vector observation.
+        output:
+            [vector_information, [visual_info0, visual_info1, visual_info2, ...]]
+        '''
+        ss = []
+        for j in range(n):
+            s = []
+            for k in range(cameras):
+                s.append(brain_obs.visual_observations[k][j])
+            ss.append(np.array(s))
+        return np.array(ss)
 
 class SamplerWrapper(BasicWrapper):
     def __init__(self, env, env_args):
